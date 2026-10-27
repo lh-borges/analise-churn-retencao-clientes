@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Auditoria da base de clientes
 
 ## Sobre o exercício
@@ -239,3 +240,6 @@ A auditoria é uma etapa preparatória. Antes da recomendação executiva solici
 8. Escolher uma iniciativa e um público, simular cenários e propor um teste com grupo de controle.
 
 Até que essas etapas sejam concluídas, os resultados permitem descrever e auditar a base, mas não sustentam uma recomendação causal de retenção.
+=======
+# analise-churn-retencao-clientes
+>>>>>>> 47b5c182503ef85c27869a56c9c890f28ac66385

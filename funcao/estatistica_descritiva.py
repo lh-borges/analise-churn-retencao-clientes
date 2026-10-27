@@ -133,14 +133,20 @@ def analisar_colunas_categoricas(df_clientes: pd.DataFrame) -> None:
     figura, eixos = plt.subplots(2, 2, figsize=(16, 10))
 
     for coluna, eixo in zip(colunas_categoricas, eixos.flatten()):
-        valores_unicos = df_clientes[coluna].unique()
-        contagem = df_clientes[coluna].value_counts(dropna=False)
+        valores = df_clientes[coluna]
+
+        # Deixei de fora a regiao "?", que nao identifica nenhuma regiao
+        if coluna == "regiao":
+            valores = valores[valores != "?"]
+
+        valores_unicos = valores.unique()
+        contagem = valores.value_counts(dropna=False)
 
         print(f"\nColuna: {coluna}")
         print(f"Valores unicos: {valores_unicos}")
         print(
             "Quantidade de valores unicos: "
-            f"{df_clientes[coluna].nunique(dropna=False)}"
+            f"{valores.nunique(dropna=False)}"
         )
         print("Contagem de cada valor:")
         print(contagem)

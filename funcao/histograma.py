@@ -1,6 +1,7 @@
 from math import ceil
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 
@@ -11,6 +12,26 @@ COLUNAS_HISTOGRAMA = [
     "dias_ativos_ult_mes",
     "horas_assistidas_total",
 ]
+
+
+def calcular_curva_densidade(
+    valores: pd.Series,
+    pontos: int = 200,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Calcula a curva de densidade (KDE gaussiana) dos valores."""
+    dados = valores.to_numpy(dtype=float)
+
+    # Usei a regra de Scott para definir a largura da curva
+    largura = dados.std(ddof=1) * len(dados) ** (-1 / 5)
+    eixo_x = np.linspace(dados.min(), dados.max(), pontos)
+
+    # Somei uma curva normal centrada em cada valor e tirei a media
+    distancias = (eixo_x[:, None] - dados[None, :]) / largura
+    densidade = np.exp(-0.5 * distancias**2).mean(axis=1) / (
+        largura * np.sqrt(2 * np.pi)
+    )
+
+    return eixo_x, densidade
 
 
 def gerar_histogramas(
@@ -33,13 +54,36 @@ def gerar_histogramas(
     eixos = eixos.flatten()
 
     for coluna, eixo in zip(colunas_analisadas, eixos):
-        eixo.hist(
-            df_clientes[coluna].dropna(),
+        valores = df_clientes[coluna].dropna()
+
+        # Mantive apenas idades entre 0 e 100 anos no histograma
+        if coluna == "idade":
+            valores = valores[valores.between(0, 100)]
+
+        # Mantive apenas valores mensais de ate 100 no histograma
+        if coluna == "valor_mensal":
+            valores = valores[valores <= 100]
+
+        _, limites_bins, _ = eixo.hist(
+            valores,
             bins=20,
             color="steelblue",
             edgecolor="black",
             alpha=0.8,
         )
+
+        # Ajustei a densidade para a escala de frequencia do histograma
+        if valores.nunique() > 1:
+            eixo_x, densidade = calcular_curva_densidade(valores)
+            largura_bin = limites_bins[1] - limites_bins[0]
+            eixo.plot(
+                eixo_x,
+                densidade * len(valores) * largura_bin,
+                color="darkorange",
+                linewidth=2,
+                label="Densidade (KDE)",
+            )
+            eixo.legend()
         eixo.set_title(f"Histograma de {coluna.replace('_', ' ').title()}")
         eixo.set_xlabel(coluna.replace("_", " ").title())
         eixo.set_ylabel("Frequencia")
