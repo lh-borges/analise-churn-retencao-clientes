@@ -38,31 +38,51 @@ Modulo - Auditar_Contagoole/
 ├── data/
 │   ├── clientes_base.csv
 │   └── funil_eventos.csv
+├── analise_bivariada.py
 └── funcao/
-    ├── __init__.py
     ├── extracao_normalizacao.py
     ├── geracao_colunas.py
+    ├── filtros.py
     ├── estatistica_descritiva.py
-    └── histograma.py
+    ├── estatistica_bivariada.py
+    ├── distribuicoes.py
+    ├── histograma.py
+    ├── receita.py
+    └── relatorio_html.py
 ```
 
-- `init.py`: inicia e coordena o fluxo.
-- `extracao_normalizacao.py`: carrega o CSV, converte datas e normaliza `plano`.
-- `geracao_colunas.py`: cria as diferenças entre datas.
-- `estatistica_descritiva.py`: produz tabelas, sanity checks, boxplots e gráficos de barras.
-- `histograma.py`: gera histogramas das principais colunas numéricas.
+- `init.py`: chama cada etapa da auditoria, imprime as tabelas e abre os gráficos.
 
-O fluxo de chamadas é:
+Cada arquivo de `funcao/` contém uma classe. Os métodos com `_` na frente são de uso interno da classe.
+
+| Arquivo | Classe | Uso |
+|---|---|---|
+| `extracao_normalizacao.py` | `ExtracaoNormalizacao(caminho_csv)` | `carregar()`: lê o CSV, converte datas e normaliza `plano`. |
+| `geracao_colunas.py` | `GeracaoColunas()` | `adicionar_diferencas_data(df)`: cria as diferenças entre datas, em dias. |
+| `filtros.py` | `Filtros(idade_minima, idade_maxima, valor_mensal_maximo)` | `aplicar(df, nomes)`: aplica os filtros pelo nome e resume quantos registros cada um removeu; `disponiveis` lista os nomes. |
+| `estatistica_descritiva.py` | `EstatisticaDescritiva(df)` | Tabelas descritivas, sanity checks, datas inválidas, contagens categóricas, boxplots e gráficos de barras. |
+| `histograma.py` | `Histograma(colunas, limites, bins)` | `gerar(df)`: histogramas com curva de densidade e limites por coluna. |
+| `receita.py` | `Receita(df)` | Calcula meses de assinatura e receita acumulada; `estatisticas()` e `resumo_por_grupo(coluna)`. |
+| `relatorio_html.py` | `RelatorioHtml(titulo)` | Monta um HTML sem framework: `adicionar_secao()`, `adicionar_tabela()`, `adicionar_lista()`, `adicionar_figura()` e `salvar(caminho)`. |
+| `estatistica_bivariada.py` | `EstatisticaBivariada(df)` | Pearson, Spearman, regressão linear, teste t de Welch, ponto-bisserial, qui-quadrado, V de Cramér, taxas por faixa ou categoria e os gráficos de cada um. |
+| `distribuicoes.py` | `Distribuicoes` | P-valores das distribuições t e qui-quadrado, implementados sem o scipy. |
+
+`analise_bivariada.py` usa essas classes para cruzar região x assinaturas, idade x cancelamento, receita acumulada x tempo de assinatura e ciclo x cancelamento, e gera `saida/analise_bivariada.html`:
+
+```powershell
+python ".\Modulo - Auditar_Contagoole\analise_bivariada.py"
+```
+
+Os métodos não imprimem nem chamam `plt.show()`: retornam tabelas, DataFrames ou figuras para que qualquer script os reutilize. O fluxo de `init.py` é:
 
 ```text
 init.py
-  → preparar_base_clientes()
-    → extrair_e_normalizar_clientes()
-      → extrair_clientes()
-      → normalizar_clientes()
-    → gerar_colunas_diferenca_data()
-  → executar_analise_descritiva()
-    → tabelas, verificações e gráficos
+  → ExtracaoNormalizacao(caminho).carregar()
+  → GeracaoColunas().adicionar_diferencas_data()
+  → EstatisticaDescritiva(df): tabelas e verificações da base completa
+  → Filtros().aplicar() → Receita(df_ativos): estatísticas dos ativos
+  → gráficos
+  → RelatorioHtml.salvar() → saida/relatorio_clientes.html
 ```
 
 ## Como executar
@@ -85,7 +105,7 @@ Execução a partir da pasta `Exercícios`:
 python ".\Modulo - Auditar_Contagoole\init.py"
 ```
 
-O programa imprime as tabelas no terminal e abre três figuras: boxplots das diferenças de datas, gráficos de barras das categorias e histogramas das variáveis numéricas.
+O programa gera o relatório `saida/relatorio_clientes.html` e o abre no navegador. O arquivo é único e independente: as tabelas, o estilo e os três gráficos (boxplots das diferenças de datas, barras das categorias e histogramas das variáveis numéricas) ficam dentro dele, sem framework nem arquivos externos.
 
 ## Dicionário da base original
 

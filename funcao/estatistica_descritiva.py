@@ -1,210 +1,196 @@
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.figure import Figure
 
-from .extracao_normalizacao import COLUNAS_DATA
-from .geracao_colunas import COLUNAS_DIFERENCA_DATA
-from .histograma import gerar_histogramas
+from .extracao_normalizacao import ExtracaoNormalizacao
+from .geracao_colunas import GeracaoColunas
 
 
-def gerar_estatisticas_numericas(
-    df_clientes: pd.DataFrame,
-) -> tuple[list[str], pd.DataFrame]:
-    """Retorna as colunas numericas e suas estatisticas descritivas."""
-    # Identifiquei automaticamente as colunas numericas do DataFrame
-    colunas_numericas = df_clientes.select_dtypes(include="number").columns.tolist()
+COLUNAS_DATA = ExtracaoNormalizacao.COLUNAS_DATA
+COLUNAS_DIFERENCA_DATA = GeracaoColunas.COLUNAS_DIFERENCA_DATA
 
-    # Montei a tabela com as estatisticas e a quantidade de nulos
-    estatisticas = (
-        df_clientes[colunas_numericas]
-        .describe()
-        .T.rename(
-            columns={
-                "count": "contagem",
-                "mean": "media",
-                "std": "desvio_padrao",
-                "min": "minimo",
-                "25%": "quartil_25",
-                "50%": "mediana",
-                "75%": "quartil_75",
-                "max": "maximo",
+
+class EstatisticaDescritiva:
+    """Gera tabelas, verificacoes e graficos descritivos de uma base de clientes."""
+
+    COLUNAS_CATEGORICAS = ["plano", "ciclo", "regiao", "canal_aquisicao"]
+
+    # Valores que nao representam uma categoria real em cada coluna
+    VALORES_IGNORADOS_CATEGORICAS = {"regiao": ["?"]}
+
+    def __init__(self, df_clientes: pd.DataFrame) -> None:
+        """Guarda a base que sera analisada."""
+        self.df_clientes = df_clientes
+
+    @staticmethod
+    def descrever(df_clientes: pd.DataFrame, colunas: list[str]) -> pd.DataFrame:
+        """Retorna a estatistica descritiva das colunas com os nomes em portugues."""
+        return (
+            df_clientes[colunas]
+            .describe()
+            .T.rename(
+                columns={
+                    "count": "contagem",
+                    "mean": "media",
+                    "std": "desvio_padrao",
+                    "min": "minimo",
+                    "25%": "quartil_25",
+                    "50%": "mediana",
+                    "75%": "quartil_75",
+                    "max": "maximo",
+                }
+            )
+        )
+
+    @property
+    def colunas_numericas(self) -> list[str]:
+        """Retorna as colunas numericas da base."""
+        return self.df_clientes.select_dtypes(include="number").columns.tolist()
+
+    def estatisticas_numericas(self) -> pd.DataFrame:
+        """Retorna as estatisticas descritivas e os nulos das colunas numericas."""
+        estatisticas = self.descrever(self.df_clientes, self.colunas_numericas)
+        estatisticas.insert(
+            1,
+            "nulos",
+            self.df_clientes[self.colunas_numericas].isna().sum(),
+        )
+
+        return estatisticas
+
+    def sanity_check_datas(self) -> pd.DataFrame:
+        """Resume nulos, intervalos e valores negativos das diferencas de datas."""
+        diferencas = self.df_clientes[COLUNAS_DIFERENCA_DATA]
+
+        # Fiz uma verificacao rapida para encontrar diferencas de datas incoerentes
+        return pd.DataFrame(
+            {
+                "nao_nulos": diferencas.count(),
+                "nulos": diferencas.isna().sum(),
+                "minimo_dias": diferencas.min(),
+                "maximo_dias": diferencas.max(),
+                "valores_negativos": diferencas.lt(0).sum(),
             }
         )
-    )
-    estatisticas.insert(1, "nulos", df_clientes[colunas_numericas].isna().sum())
 
-    return colunas_numericas, estatisticas
+    def estatisticas_diferencas_data(self) -> pd.DataFrame:
+        """Gera a tabela descritiva com as informacoes usadas nos boxplots."""
+        # Comecei pelas estatisticas descritivas das diferencas entre datas
+        estatisticas = self.descrever(self.df_clientes, COLUNAS_DIFERENCA_DATA)
 
-
-def gerar_sanity_check_datas(df_clientes: pd.DataFrame) -> pd.DataFrame:
-    """Resume nulos, intervalos e valores negativos das diferencas de datas."""
-    # Fiz uma verificacao rapida para encontrar diferencas de datas incoerentes
-    return pd.DataFrame(
-        {
-            "nao_nulos": df_clientes[COLUNAS_DIFERENCA_DATA].count(),
-            "nulos": df_clientes[COLUNAS_DIFERENCA_DATA].isna().sum(),
-            "minimo_dias": df_clientes[COLUNAS_DIFERENCA_DATA].min(),
-            "maximo_dias": df_clientes[COLUNAS_DIFERENCA_DATA].max(),
-            "valores_negativos": df_clientes[COLUNAS_DIFERENCA_DATA]
-            .lt(0)
-            .sum(),
-        }
-    )
-
-
-def gerar_estatisticas_diferencas_data(
-    df_clientes: pd.DataFrame,
-) -> pd.DataFrame:
-    """Gera a tabela descritiva com as informacoes usadas nos boxplots."""
-    # Comecei pelas estatisticas descritivas das diferencas entre datas
-    estatisticas = (
-        df_clientes[COLUNAS_DIFERENCA_DATA]
-        .describe()
-        .T.rename(
-            columns={
-                "count": "contagem",
-                "mean": "media",
-                "std": "desvio_padrao",
-                "min": "minimo",
-                "25%": "quartil_25",
-                "50%": "mediana",
-                "75%": "quartil_75",
-                "max": "maximo",
-            }
+        # Calculei a amplitude interquartil e os limites usados no boxplot
+        estatisticas["amplitude_interquartil"] = (
+            estatisticas["quartil_75"] - estatisticas["quartil_25"]
         )
-    )
-
-    # Calculei a amplitude interquartil e os limites usados no boxplot
-    estatisticas["amplitude_interquartil"] = (
-        estatisticas["quartil_75"] - estatisticas["quartil_25"]
-    )
-    estatisticas["limite_inferior_boxplot"] = (
-        estatisticas["quartil_25"] - 1.5 * estatisticas["amplitude_interquartil"]
-    )
-    estatisticas["limite_superior_boxplot"] = (
-        estatisticas["quartil_75"] + 1.5 * estatisticas["amplitude_interquartil"]
-    )
-
-    # Calculei os bigodes e contei os outliers de cada coluna
-    for coluna in COLUNAS_DIFERENCA_DATA:
-        valores = df_clientes[coluna].dropna()
-        limite_inferior = estatisticas.loc[coluna, "limite_inferior_boxplot"]
-        limite_superior = estatisticas.loc[coluna, "limite_superior_boxplot"]
-        valores_sem_outliers = valores.between(limite_inferior, limite_superior)
-
-        estatisticas.loc[coluna, "bigode_inferior"] = valores[
-            valores_sem_outliers
-        ].min()
-        estatisticas.loc[coluna, "bigode_superior"] = valores[
-            valores_sem_outliers
-        ].max()
-        estatisticas.loc[coluna, "quantidade_outliers"] = (
-            ~valores_sem_outliers
-        ).sum()
-
-    return estatisticas
-
-
-def gerar_boxplots_datas(df_clientes: pd.DataFrame) -> None:
-    """Gera os boxplots das diferencas entre datas."""
-    # Criei um boxplot para cada diferenca de data
-    figura, eixos = plt.subplots(2, 2, figsize=(16, 10))
-
-    for coluna, eixo in zip(COLUNAS_DIFERENCA_DATA, eixos.flatten()):
-        eixo.boxplot(
-            df_clientes[coluna].dropna(),
-            orientation="horizontal",
-            patch_artist=True,
-            boxprops={"facecolor": "lightblue", "edgecolor": "black"},
-            medianprops={"color": "red", "linewidth": 2},
+        estatisticas["limite_inferior_boxplot"] = (
+            estatisticas["quartil_25"] - 1.5 * estatisticas["amplitude_interquartil"]
         )
-        eixo.set_title(coluna.replace("_", " ").title())
-        eixo.set_xlabel("Dias")
-        eixo.set_yticks([])
-        eixo.grid(axis="x", linestyle="--", alpha=0.4)
-
-    figura.suptitle("Boxplots das diferencas entre datas", fontsize=16)
-    figura.tight_layout(rect=(0, 0, 1, 0.96))
-
-
-def analisar_colunas_categoricas(df_clientes: pd.DataFrame) -> None:
-    """Mostra as contagens e gera os graficos das colunas categoricas."""
-    # Escolhi as colunas categoricas solicitadas para fazer a analise
-    colunas_categoricas = ["plano", "ciclo", "regiao", "canal_aquisicao"]
-    figura, eixos = plt.subplots(2, 2, figsize=(16, 10))
-
-    for coluna, eixo in zip(colunas_categoricas, eixos.flatten()):
-        valores = df_clientes[coluna]
-
-        # Deixei de fora a regiao "?", que nao identifica nenhuma regiao
-        if coluna == "regiao":
-            valores = valores[valores != "?"]
-
-        valores_unicos = valores.unique()
-        contagem = valores.value_counts(dropna=False)
-
-        print(f"\nColuna: {coluna}")
-        print(f"Valores unicos: {valores_unicos}")
-        print(
-            "Quantidade de valores unicos: "
-            f"{valores.nunique(dropna=False)}"
+        estatisticas["limite_superior_boxplot"] = (
+            estatisticas["quartil_75"] + 1.5 * estatisticas["amplitude_interquartil"]
         )
-        print("Contagem de cada valor:")
-        print(contagem)
 
-        contagem.plot(
-            kind="bar",
-            ax=eixo,
-            color="steelblue",
-            edgecolor="black",
-        )
-        eixo.set_title(f"Contagem por {coluna.replace('_', ' ').title()}")
-        eixo.set_xlabel(coluna.replace("_", " ").title())
-        eixo.set_ylabel("Quantidade")
-        eixo.tick_params(axis="x", rotation=45)
+        # Calculei os bigodes e contei os outliers de cada coluna
+        for coluna in COLUNAS_DIFERENCA_DATA:
+            valores = self.df_clientes[coluna].dropna()
+            limite_inferior = estatisticas.loc[coluna, "limite_inferior_boxplot"]
+            limite_superior = estatisticas.loc[coluna, "limite_superior_boxplot"]
+            valores_sem_outliers = valores.between(limite_inferior, limite_superior)
 
-    figura.tight_layout()
+            estatisticas.loc[coluna, "bigode_inferior"] = valores[
+                valores_sem_outliers
+            ].min()
+            estatisticas.loc[coluna, "bigode_superior"] = valores[
+                valores_sem_outliers
+            ].max()
+            estatisticas.loc[coluna, "quantidade_outliers"] = (
+                ~valores_sem_outliers
+            ).sum()
 
+        return estatisticas
 
-def executar_analise_descritiva(df_clientes: pd.DataFrame) -> None:
-    """Executa as estatisticas, verificacoes e graficos da base preparada."""
-    print("CLIENTES")
-    print("Tipos das colunas:")
-    print(df_clientes.dtypes)
+    def datas_invalidas(self) -> pd.DataFrame:
+        """Retorna os registros com alguma diferenca de datas negativa."""
+        # Separei os registros negativos para mostrar as inconsistencias encontradas
+        mascara = self.df_clientes[COLUNAS_DIFERENCA_DATA].lt(0).any(axis=1)
+        return self.df_clientes.loc[
+            mascara,
+            ["cliente_id", *COLUNAS_DATA, *COLUNAS_DIFERENCA_DATA],
+        ]
 
-    print("\nInformacoes do DataFrame:")
-    df_clientes.info()
+    def contagens_categoricas(
+        self,
+        colunas: list[str] | None = None,
+        valores_ignorados: dict[str, list[str]] | None = None,
+    ) -> dict[str, pd.Series]:
+        """Retorna a contagem de cada valor das colunas categoricas."""
+        colunas_analisadas = colunas or self.COLUNAS_CATEGORICAS
+        if valores_ignorados is None:
+            valores_ignorados = self.VALORES_IGNORADOS_CATEGORICAS
 
-    # Consumi a funcao das estatisticas numericas e mostrei os resultados
-    colunas_numericas, estatisticas_numericas = gerar_estatisticas_numericas(
-        df_clientes
-    )
-    print("\nCOLUNAS NUMERICAS")
-    print(colunas_numericas)
-    print("\nESTATISTICAS DAS COLUNAS NUMERICAS")
-    print(estatisticas_numericas.round(2).to_string())
+        contagens = {}
+        for coluna in colunas_analisadas:
+            # Deixei de fora os valores que nao identificam uma categoria real
+            valores = self.df_clientes[coluna]
+            valores = valores[~valores.isin(valores_ignorados.get(coluna, []))]
+            contagens[coluna] = valores.value_counts(dropna=False)
 
-    sanity_check_datas = gerar_sanity_check_datas(df_clientes)
-    print("\nSANITY CHECK DAS DIFERENCAS ENTRE DATAS")
-    print(sanity_check_datas)
+        return contagens
 
-    estatisticas_datas = gerar_estatisticas_diferencas_data(df_clientes)
-    print("\nESTATISTICA DESCRITIVA DAS DIFERENCAS ENTRE DATAS")
-    print(estatisticas_datas.round(2).to_string())
+    def boxplots_datas(self) -> Figure:
+        """Gera os boxplots das diferencas entre datas."""
+        # Criei um boxplot para cada diferenca de data
+        figura, eixos = plt.subplots(2, 2, figsize=(16, 10))
 
-    # Separei os registros negativos para mostrar as inconsistencias encontradas
-    mascara_datas_invalidas = df_clientes[COLUNAS_DIFERENCA_DATA].lt(0).any(axis=1)
-    datas_invalidas = df_clientes.loc[
-        mascara_datas_invalidas,
-        ["cliente_id", *COLUNAS_DATA, *COLUNAS_DIFERENCA_DATA],
-    ]
+        for coluna, eixo in zip(COLUNAS_DIFERENCA_DATA, eixos.flatten()):
+            eixo.boxplot(
+                self.df_clientes[coluna].dropna(),
+                orientation="horizontal",
+                patch_artist=True,
+                boxprops={"facecolor": "lightblue", "edgecolor": "black"},
+                medianprops={"color": "red", "linewidth": 2},
+            )
+            eixo.set_title(self._titulo(coluna))
+            eixo.set_xlabel("Dias")
+            eixo.set_yticks([])
+            eixo.grid(axis="x", linestyle="--", alpha=0.4)
 
-    print("\nRegistros com diferencas de datas negativas:")
-    if datas_invalidas.empty:
-        print("Nenhuma inconsistencia encontrada.")
-    else:
-        print(datas_invalidas.to_string(index=False))
+        figura.suptitle("Boxplots das diferencas entre datas", fontsize=16)
+        figura.tight_layout(rect=(0, 0, 1, 0.96))
 
-    gerar_boxplots_datas(df_clientes)
-    analisar_colunas_categoricas(df_clientes)
-    gerar_histogramas(df_clientes)
-    plt.show()
+        return figura
+
+    def graficos_categoricos(
+        self,
+        contagens: dict[str, pd.Series] | None = None,
+    ) -> Figure:
+        """Gera um grafico de barras para cada contagem categorica."""
+        if contagens is None:
+            contagens = self.contagens_categoricas()
+
+        figura, eixos = plt.subplots(2, 2, figsize=(16, 10))
+        eixos = eixos.flatten()
+
+        for (coluna, contagem), eixo in zip(contagens.items(), eixos):
+            contagem.plot(
+                kind="bar",
+                ax=eixo,
+                color="steelblue",
+                edgecolor="black",
+            )
+            eixo.set_title(f"Contagem por {self._titulo(coluna)}")
+            eixo.set_xlabel(self._titulo(coluna))
+            eixo.set_ylabel("Quantidade")
+            eixo.tick_params(axis="x", rotation=45)
+
+        # Escondi os espacos da grade que nao receberam nenhum grafico
+        for eixo in eixos[len(contagens) :]:
+            eixo.set_visible(False)
+
+        figura.tight_layout()
+
+        return figura
+
+    @staticmethod
+    def _titulo(coluna: str) -> str:
+        """Transforma o nome da coluna em um titulo legivel."""
+        return coluna.replace("_", " ").title()
