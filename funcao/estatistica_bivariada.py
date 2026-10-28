@@ -6,6 +6,7 @@ import pandas as pd
 from matplotlib.figure import Figure
 
 from .distribuicoes import Distribuicoes
+from .histograma import Histograma
 
 
 class EstatisticaBivariada:
@@ -207,6 +208,91 @@ class EstatisticaBivariada:
             ]
         )
 
+    def resumo_numericas_por_alvo(
+        self,
+        colunas_numericas: list[str],
+        coluna_alvo: str,
+    ) -> pd.DataFrame:
+        """Compara varias colunas numericas entre os grupos 0 e 1 do alvo.
+
+        Para cada coluna: medias e medianas dos dois grupos, d de Cohen
+        (tamanho da diferenca em desvios padrao), correlacao ponto-bisserial,
+        p-valor do teste t de Welch e AUC (quanto a coluna separa os grupos).
+        """
+        linhas = []
+        for coluna in colunas_numericas:
+            dados = self.df_clientes[[coluna, coluna_alvo]].dropna()
+            grupo_0 = dados.loc[dados[coluna_alvo] == 0, coluna]
+            grupo_1 = dados.loc[dados[coluna_alvo] == 1, coluna]
+
+            teste = EstatisticaBivariada(dados).teste_diferenca_medias(coluna, coluna_alvo)
+            auc = self._auc(dados[coluna], dados[coluna_alvo])
+
+            # d de Cohen: diferenca das medias dividida pelo desvio padrao combinado
+            desvio_combinado = sqrt(
+                ((len(grupo_0) - 1) * grupo_0.var() + (len(grupo_1) - 1) * grupo_1.var())
+                / (len(dados) - 2)
+            )
+
+            linhas.append(
+                {
+                    "variavel": coluna,
+                    "n": len(dados),
+                    "media_0": grupo_0.mean(),
+                    "media_1": grupo_1.mean(),
+                    "mediana_0": grupo_0.median(),
+                    "mediana_1": grupo_1.median(),
+                    "d_cohen": (grupo_1.mean() - grupo_0.mean()) / desvio_combinado,
+                    "r_ponto_bisserial": teste.loc["r_ponto_bisserial", "valor"],
+                    "p_valor_t": teste.loc["p_valor_t", "valor"],
+                    "auc": auc,
+                    "leitura": self._ler_auc(auc),
+                }
+            )
+
+        tabela = pd.DataFrame(linhas).set_index("variavel")
+
+        # Ordenei da variavel que mais separa os grupos para a que menos separa
+        separacao = (tabela["auc"] - 0.5).abs()
+        return tabela.loc[separacao.sort_values(ascending=False).index]
+
+    def resumo_categoricas_por_alvo(
+        self,
+        colunas_categoricas: list[str],
+        coluna_alvo: str,
+        valores_ignorados: dict[str, list[str]] | None = None,
+    ) -> pd.DataFrame:
+        """Compara a taxa do alvo entre as categorias de varias colunas."""
+        valores_ignorados = valores_ignorados or {}
+
+        linhas = []
+        for coluna in colunas_categoricas:
+            # Deixei de fora os valores que nao identificam uma categoria real
+            dados = self.df_clientes[
+                ~self.df_clientes[coluna].isin(valores_ignorados.get(coluna, []))
+            ]
+            bivariada = EstatisticaBivariada(dados)
+            taxas = bivariada.taxa_por_categoria(coluna, coluna_alvo)["taxa"]
+            teste = bivariada.qui_quadrado(coluna, coluna_alvo)
+
+            linhas.append(
+                {
+                    "variavel": coluna,
+                    "n": len(dados),
+                    "categorias": len(taxas),
+                    "menor_taxa": f"{taxas.idxmin()} ({taxas.min():.1%})",
+                    "maior_taxa": f"{taxas.idxmax()} ({taxas.max():.1%})",
+                    "qui_quadrado": teste.loc["qui_quadrado", "valor"],
+                    "p_valor": teste.loc["p_valor", "valor"],
+                    "v_cramer": teste.loc["v_cramer", "valor"],
+                    "leitura": teste.loc["v_cramer", "leitura"],
+                }
+            )
+
+        return pd.DataFrame(linhas).set_index("variavel").sort_values(
+            "v_cramer", ascending=False
+        )
+
     def taxa_por_faixa(
         self,
         coluna_numerica: str,
@@ -229,56 +315,81 @@ class EstatisticaBivariada:
 
         return tabela
 
-    def grafico_numerica_por_grupo(
+    def grafico_histograma_por_grupo(
         self,
         coluna_numerica: str,
         coluna_grupo: str,
-        limites_faixas: list[float],
+        rotulos_grupos: dict[int, str] | None = None,
     ) -> Figure:
-        """Boxplot da numerica por grupo e taxa do grupo 1 em cada faixa."""
-        figura, (eixo_boxplot, eixo_taxa) = plt.subplots(1, 2, figsize=(16, 6))
+        """Histogramas sobrepostos da numerica nos grupos 0 e 1, com KDE e mediana.
 
-        # Boxplot: distribuicao da numerica em cada grupo
-        grupos = sorted(self.df_clientes[coluna_grupo].dropna().unique())
-        eixo_boxplot.boxplot(
-            [self.df_clientes.loc[self.df_clientes[coluna_grupo] == g, coluna_numerica] for g in grupos],
-            tick_labels=[f"{coluna_grupo} = {g}" for g in grupos],
-            patch_artist=True,
-            boxprops={"facecolor": "lightblue", "edgecolor": "black"},
-            medianprops={"color": "red", "linewidth": 2},
-        )
-        eixo_boxplot.set_title(f"{self._titulo(coluna_numerica)} por {coluna_grupo}")
-        eixo_boxplot.set_ylabel(self._titulo(coluna_numerica))
-        eixo_boxplot.grid(axis="y", linestyle="--", alpha=0.4)
+        Cada histograma mostra o % do proprio grupo, para que grupos de
+        tamanhos diferentes (ex.: 3.500 ativos e 380 cancelados) possam ser
+        comparados no mesmo grafico.
+        """
+        if rotulos_grupos is None:
+            rotulos_grupos = {0: "Ativos", 1: "Cancelados"}
 
-        # Barras: taxa em cada faixa, com a quantidade de clientes em cima
-        tabela = self.taxa_por_faixa(coluna_numerica, coluna_grupo, limites_faixas)
-        barras = eixo_taxa.bar(
-            tabela.index, tabela["taxa"], color=self.COR_CANCELADO, edgecolor="black"
+        dados = self.df_clientes[[coluna_numerica, coluna_grupo]].dropna()
+        bins = self._bins_histograma(dados[coluna_numerica])
+        largura_bin = bins[1] - bins[0]
+
+        figura, eixo = plt.subplots(figsize=(14, 6))
+        cores = {0: self.COR_ATIVO, 1: self.COR_CANCELADO}
+
+        for grupo in (0, 1):
+            valores = dados.loc[dados[coluna_grupo] == grupo, coluna_numerica]
+            rotulo = f"{rotulos_grupos[grupo]} ({coluna_grupo} = {grupo}, n={len(valores)})"
+
+            # Pesos de 100/n fazem as barras de cada grupo somarem 100%
+            eixo.hist(
+                valores,
+                bins=bins,
+                weights=np.full(len(valores), 100 / len(valores)),
+                color=cores[grupo],
+                alpha=0.45,
+                edgecolor=cores[grupo],
+                label=rotulo,
+            )
+
+            # Curva de densidade na mesma escala das barras. Em variaveis com
+            # poucos valores (ex.: NPS de 0 a 10) a curva engana, entao pulei
+            if valores.nunique() > 15:
+                eixo_x, densidade = Histograma.calcular_curva_densidade(valores)
+                eixo.plot(eixo_x, densidade * largura_bin * 100, color=cores[grupo], linewidth=2)
+
+            eixo.axvline(
+                valores.median(),
+                color=cores[grupo],
+                linestyle="--",
+                linewidth=2,
+                label=f"Mediana {rotulos_grupos[grupo].lower()}: {valores.median():,.1f}",
+            )
+
+        eixo.set_title(
+            f"Histograma de {self._titulo(coluna_numerica)}: "
+            f"{rotulos_grupos[0].lower()} x {rotulos_grupos[1].lower()}"
         )
-        eixo_taxa.bar_label(
-            barras,
-            labels=[f"{t:.1%}\nn={n}" for t, n in zip(tabela["taxa"], tabela["clientes"])],
-            label_type="center",
-            color="white",
-            fontsize=9,
-            fontweight="bold",
-        )
-        eixo_taxa.axhline(
-            self.df_clientes[coluna_grupo].mean(),
-            color="black",
-            linestyle="--",
-            label="Taxa geral",
-        )
-        eixo_taxa.set_title(f"Taxa de {coluna_grupo} por faixa de {coluna_numerica}")
-        eixo_taxa.set_xlabel(f"Faixa de {coluna_numerica}")
-        eixo_taxa.set_ylabel(f"Taxa de {coluna_grupo}")
-        eixo_taxa.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
-        eixo_taxa.legend()
-        eixo_taxa.grid(axis="y", linestyle="--", alpha=0.4)
+        eixo.set_xlabel(self._titulo(coluna_numerica))
+        eixo.set_ylabel("% dos clientes do grupo")
+        eixo.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}%"))
+        eixo.legend()
+        eixo.grid(axis="y", linestyle="--", alpha=0.4)
 
         figura.tight_layout()
         return figura
+
+    @staticmethod
+    def _bins_histograma(valores: pd.Series) -> np.ndarray:
+        """Limites das barras: uma por valor inteiro quando a escala e curta."""
+        minimo, maximo = valores.min(), valores.max()
+
+        # Variaveis inteiras com ate 60 valores (NPS, dias, meses): uma barra
+        # centrada em cada inteiro, para nao juntar valores diferentes
+        if (valores % 1 == 0).all() and maximo - minimo <= 60:
+            return np.arange(minimo, maximo + 2) - 0.5
+
+        return np.histogram_bin_edges(valores, bins=30)
 
     # ------------------------------------------------------------------
     # Categorica x categorica (ex.: regiao x churn, ciclo x churn)
@@ -358,14 +469,7 @@ class EstatisticaBivariada:
         barras = eixo_taxa.bar(
             tabela.index, tabela["taxa"], color=self.COR_CANCELADO, edgecolor="black"
         )
-        eixo_taxa.bar_label(
-            barras,
-            labels=[f"{t:.1%}" for t in tabela["taxa"]],
-            label_type="center",
-            color="white",
-            fontsize=10,
-            fontweight="bold",
-        )
+        self._rotular_barras(eixo_taxa, barras, [f"{t:.1%}" for t in tabela["taxa"]])
         eixo_taxa.axhline(
             self.df_clientes[coluna_alvo].mean(),
             color="black",
@@ -422,6 +526,59 @@ class EstatisticaBivariada:
             intensidade = "Muito forte"
         sentido = "positiva" if r > 0 else "negativa"
         return f"{intensidade} {sentido}"
+
+    @staticmethod
+    def _rotular_barras(eixo, barras, rotulos: list[str]) -> None:
+        """Escreve o rotulo dentro das barras altas e acima das barras baixas."""
+        altura_maxima = max(barra.get_height() for barra in barras) or 1
+
+        for barra, rotulo in zip(barras, rotulos):
+            altura = barra.get_height()
+            centro_x = barra.get_x() + barra.get_width() / 2
+
+            # Barra alta: rotulo branco no meio. Barra baixa: rotulo escuro em cima
+            if altura >= 0.25 * altura_maxima:
+                eixo.text(
+                    centro_x, altura / 2, rotulo, ha="center", va="center",
+                    color="white", fontsize=9, fontweight="bold",
+                )
+            else:
+                eixo.text(
+                    centro_x, altura + 0.01 * altura_maxima, rotulo, ha="center",
+                    va="bottom", color="black", fontsize=9, fontweight="bold",
+                )
+
+    @staticmethod
+    def _auc(valores: pd.Series, alvo: pd.Series) -> float:
+        """Area sob a curva ROC, calculada pelos postos (igual ao Mann-Whitney).
+
+        E a chance de um cliente do grupo 1 ter valor maior que um do grupo 0.
+        0.5 = a coluna nao separa os grupos; perto de 0 ou de 1 = separa muito.
+        """
+        postos = valores.rank()
+        n_1 = int(alvo.sum())
+        n_0 = len(alvo) - n_1
+        soma_postos_1 = postos[alvo == 1].sum()
+
+        return (soma_postos_1 - n_1 * (n_1 + 1) / 2) / (n_1 * n_0)
+
+    @staticmethod
+    def _ler_auc(auc: float) -> str:
+        """Classifica o quanto a coluna separa os grupos e em qual sentido."""
+        # Uso a distancia ate 0.5: AUC de 0.2 separa tanto quanto 0.8
+        separacao = max(auc, 1 - auc)
+        if separacao < 0.6:
+            return "Nao separa os grupos"
+        if separacao < 0.7:
+            intensidade = "Separa pouco"
+        elif separacao < 0.8:
+            intensidade = "Separa moderadamente"
+        elif separacao < 0.9:
+            intensidade = "Separa bem"
+        else:
+            intensidade = "Separa muito"
+        sentido = "valores maiores" if auc > 0.5 else "valores menores"
+        return f"{intensidade}: grupo 1 tem {sentido}"
 
     @staticmethod
     def _ler_v_cramer(v: float) -> str:

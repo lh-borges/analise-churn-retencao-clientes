@@ -61,7 +61,7 @@ class Histograma:
 
             # Ajustei a densidade para a escala de frequencia do histograma
             if valores.nunique() > 1:
-                eixo_x, densidade = self._calcular_curva_densidade(valores)
+                eixo_x, densidade = self.calcular_curva_densidade(valores)
                 largura_bin = limites_bins[1] - limites_bins[0]
                 eixo.plot(
                     eixo_x,
@@ -96,7 +96,7 @@ class Histograma:
         return valores
 
     @staticmethod
-    def _calcular_curva_densidade(
+    def calcular_curva_densidade(
         valores: pd.Series,
         pontos: int = 200,
     ) -> tuple[np.ndarray, np.ndarray]:

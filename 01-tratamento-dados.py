@@ -26,7 +26,7 @@ from funcao.relatorio_html import RelatorioHtml
 
 
 # Este bloco so roda quando o arquivo e executado diretamente
-# (python init.py). Se outro arquivo importar o init.py, nada aqui e executado.
+# (python 01-tratamento-dados.py). Se outro arquivo importar este arquivo, nada aqui e executado.
 if __name__ == "__main__":
     # Montei os caminhos a partir da pasta deste arquivo, assim o script
     # funciona independente da pasta de onde ele for executado

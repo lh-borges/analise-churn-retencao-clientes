@@ -1,10 +1,12 @@
 """Analise bivariada da base de clientes.
 
-Quatro relacoes entre duas variaveis:
+Relacoes entre duas variaveis:
     1. Numero de assinaturas x regiao   (contagem, taxa de cancelamento e qui-quadrado)
     2. Idade x cancelamento             (teste t de Welch, ponto-bisserial e faixas)
     3. Receita acumulada x tempo        (Pearson, Spearman e regressao linear)
     4. Ciclo x cancelamento             (tabela cruzada, qui-quadrado e V de Cramer)
+    5. Churn em 2024 x perfil e uso     (idade, NPS, dias ativos, horas assistidas,
+                                         tempo de casa, recencia, plano, ciclo e regiao)
 
 O resultado vai para saida/analise_bivariada.html, que abre no navegador.
 """
@@ -15,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 # Classes do projeto, uma por arquivo dentro de funcao/
+from funcao.churn_periodo import ChurnPeriodo
 from funcao.estatistica_bivariada import EstatisticaBivariada
 from funcao.extracao_normalizacao import ExtracaoNormalizacao
 from funcao.filtros import Filtros
@@ -27,16 +30,59 @@ from funcao.relatorio_html import RelatorioHtml
 # porque as faixas fecham a esquerda: [65, 101) inclui os 100 anos
 FAIXAS_IDADE = [0, 18, 25, 35, 45, 55, 65, 101]
 
+# Variaveis numericas comparadas com o churn de 2024 e as faixas usadas na
+# taxa de cancelamento de cada uma (faixas fechadas a esquerda)
+FAIXAS_CHURN_2024 = {
+    "idade": FAIXAS_IDADE,
+    "nps": [0, 7, 9, 11],
+    "dias_ativos_ult_mes": [0, 5, 10, 15, 20, 32],
+    "horas_assistidas_total": [0, 50, 100, 200, 400, 901],
+    "horas_por_mes": [0, 10, 20, 30, 40, 61],
+    "meses_assinatura": [0, 3, 6, 12, 24, 61],
+    "dias_ultimo_acesso_extracao": [0, 7, 14, 30, 60, 470],
+}
+
+# O que cada variavel mede e o cuidado ao interpretar
+NOTAS_CHURN_2024 = {
+    "idade": "Idade informada, entre 0 e 100 anos.",
+    "nps": (
+        "Faixas: detratores (0 a 6), neutros (7 e 8) e promotores (9 e 10). A base "
+        "nao informa quando a nota foi dada; se foi depois do cancelamento, ela "
+        "pode refletir a saida em vez de explica-la."
+    ),
+    "dias_ativos_ult_mes": (
+        "Medida em janeiro/2024, o mesmo mes dos cancelamentos: quem cancelou no "
+        "mes naturalmente teve menos dias ativos. Mostra a consequencia da saida e "
+        "nao serve para prever o cancelamento."
+    ),
+    "horas_assistidas_total": (
+        "Acumulada desde a assinatura, entao cresce com o tempo de casa. Compare "
+        "com horas_por_mes, que separa o consumo do tempo de casa."
+    ),
+    "horas_por_mes": (
+        "horas_assistidas_total dividida pelos meses em que o cliente esteve ativo "
+        "(da assinatura ao cancelamento ou a extracao; no minimo 1 mes)."
+    ),
+    "meses_assinatura": "Tempo de casa em 01/01/2024, em meses completos.",
+    "dias_ultimo_acesso_extracao": (
+        "Dias entre o ultimo acesso e a extracao (recencia). Quem cancelou parou de "
+        "acessar, entao ela tambem mostra a consequencia da saida."
+    ),
+}
+
+# Variaveis medidas durante ou depois do cancelamento: ficam fora das conclusoes
+VARIAVEIS_CONSEQUENCIA = ["dias_ativos_ult_mes", "dias_ultimo_acesso_extracao"]
+
 
 # Este bloco so roda quando o arquivo e executado diretamente
-# (python analise_bivariada.py)
+# (python 02-analise-univarida-bivariada.py)
 if __name__ == "__main__":
     pasta_projeto = Path(__file__).resolve().parent
     caminho_csv = pasta_projeto / "data" / "clientes_base.csv"
     caminho_relatorio = pasta_projeto / "saida" / "analise_bivariada.html"
 
     # =========================================================================
-    # PREPARACAO DA BASE (mesma do init.py)
+    # PREPARACAO DA BASE (mesma do 01-tratamento-dados.py)
     # =========================================================================
 
     # Le o CSV, converte as datas, padroniza o plano e cria as diferencas
@@ -86,7 +132,7 @@ if __name__ == "__main__":
     # 3. RECEITA ACUMULADA x TEMPO DE ASSINATURA
     # =========================================================================
 
-    # Mesmos filtros do init.py. Usei so os ativos porque a receita e calculada
+    # Mesmos filtros do 01-tratamento-dados.py. Usei so os ativos porque a receita e calculada
     # ate a data de extracao, o que so vale para quem nao cancelou
     df_receita, filtros_receita = filtros.aplicar(
         df_clientes,
@@ -144,6 +190,56 @@ if __name__ == "__main__":
     teste_ciclo = bivariada_ciclo.qui_quadrado("ciclo", "churn")
 
     # =========================================================================
+    # 5. CHURN EM 2024 x PERFIL E USO
+    # =========================================================================
+
+    # A base vai ate 31/01/2024, entao 2024 tem so janeiro. Segui a definicao do
+    # enunciado para a taxa de um periodo: populacao exposta = clientes ativos
+    # em 01/01/2024; churn de 2024 = quem cancelou entre 01/01 e 31/01/2024.
+    # Quem assinou em 2024 fica de fora (nao esteve exposto o periodo inteiro)
+    periodo_2024 = ChurnPeriodo("2024-01-01", "2024-12-31")
+    resumo_periodo_2024 = periodo_2024.resumo(df_clientes)
+
+    # A populacao exposta ja vem com churn_periodo, meses_assinatura (tempo de
+    # casa em 01/01/2024) e horas_por_mes. Renomeei o churn para os graficos
+    # mostrarem "churn_2024"
+    df_2024 = periodo_2024.populacao_exposta(df_clientes).rename(
+        columns={ChurnPeriodo.COLUNA_CHURN: "churn_2024"}
+    )
+    df_2024, filtros_2024 = filtros.aplicar(df_2024, ["idade_valida"])
+    bivariada_2024 = EstatisticaBivariada(df_2024)
+
+    # Uma linha por variavel numerica: medias e medianas de quem ficou (0) e de
+    # quem cancelou (1), d de Cohen, ponto-bisserial, teste t e AUC
+    resumo_numericas_2024 = bivariada_2024.resumo_numericas_por_alvo(
+        list(FAIXAS_CHURN_2024), "churn_2024"
+    )
+    resumo_numericas_2024["cuidado"] = [
+        "Consequencia da saida" if variavel in VARIAVEIS_CONSEQUENCIA else ""
+        for variavel in resumo_numericas_2024.index
+    ]
+
+    # Uma linha por variavel categorica: menor e maior taxa, qui-quadrado e V de
+    # Cramer. A regiao "?" fica de fora
+    resumo_categoricas_2024 = bivariada_2024.resumo_categoricas_por_alvo(
+        ["plano", "ciclo", "regiao"], "churn_2024", valores_ignorados={"regiao": ["?"]}
+    )
+
+    # Taxa de cancelamento em cada faixa de cada variavel numerica
+    taxas_faixa_2024 = {
+        variavel: bivariada_2024.taxa_por_faixa(variavel, "churn_2024", faixas)
+        for variavel, faixas in FAIXAS_CHURN_2024.items()
+    }
+
+    # Para os graficos por categoria, a regiao usa a base sem "?"
+    df_2024_regiao, _ = filtros.aplicar(df_2024, ["regiao_informada"])
+    bivariadas_categoricas_2024 = {
+        "plano": bivariada_2024,
+        "ciclo": bivariada_2024,
+        "regiao": EstatisticaBivariada(df_2024_regiao),
+    }
+
+    # =========================================================================
     # CONCLUSOES (montadas a partir dos resultados acima)
     # =========================================================================
 
@@ -177,6 +273,36 @@ if __name__ == "__main__":
         f"{significancia(bivariada_ciclo, ler(teste_ciclo, 'p_valor'))}; "
         f"V de Cramer = {ler(teste_ciclo, 'v_cramer'):.3f}.",
     ]
+
+    # Churn de 2024: destaquei as 3 variaveis que mais separam quem cancelou,
+    # sem contar as que sao consequencia da saida
+    explicativas_2024 = resumo_numericas_2024.drop(index=VARIAVEIS_CONSEQUENCIA)
+    destaques_2024 = "; ".join(
+        f"{variavel} (mediana {linha['mediana_1']:,.1f} nos cancelados contra "
+        f"{linha['mediana_0']:,.1f} nos ativos, AUC {linha['auc']:.2f})"
+        for variavel, linha in explicativas_2024.head(3).iterrows()
+    )
+    sem_relacao_2024 = ", ".join(
+        explicativas_2024[explicativas_2024["leitura"] == "Nao separa os grupos"].index
+    )
+    conclusoes.append(
+        f"Churn em 2024 (janeiro, unico mes de 2024 na base): dos "
+        f"{len(df_2024)} clientes ativos em 01/01/2024, {df_2024['churn_2024'].sum()} "
+        f"cancelaram ({df_2024['churn_2024'].mean():.2%}). As variaveis que mais "
+        f"separam quem cancelou sao {destaques_2024}. Nao separam os grupos: "
+        f"{sem_relacao_2024 or 'nenhuma'}. Dias ativos e recencia tambem separam muito, "
+        "mas sao consequencia da saida e ficaram fora desta conclusao."
+    )
+    conclusoes.append(
+        "Churn em 2024 por categoria: "
+        + "; ".join(
+            f"{variavel}: maior taxa em {linha['maior_taxa']} e menor em "
+            f"{linha['menor_taxa']} (p = {linha['p_valor']:.4f}, V de Cramer = "
+            f"{linha['v_cramer']:.3f})"
+            for variavel, linha in resumo_categoricas_2024.iterrows()
+        )
+        + "."
+    )
 
     # =========================================================================
     # RELATORIO HTML
@@ -225,8 +351,8 @@ if __name__ == "__main__":
         "instaveis e nao devem ser usadas sozinhas para conclusoes."
     )
     relatorio.adicionar_figura(
-        "Idade por situacao e taxa de cancelamento por faixa",
-        bivariada_idade.grafico_numerica_por_grupo("idade", "churn", FAIXAS_IDADE),
+        "Histograma de idade: ativos x cancelados (% de cada grupo)",
+        bivariada_idade.grafico_histograma_por_grupo("idade", "churn"),
     )
 
     # --- 3. Receita x tempo ---
@@ -273,6 +399,64 @@ if __name__ == "__main__":
         bivariada_ciclo.grafico_contagem_e_taxa("ciclo", "churn"),
     )
 
+    # --- 5. Churn em 2024 ---
+    relatorio.adicionar_secao(
+        "5. Churn em 2024 x perfil e uso",
+        "A base vai ate 31/01/2024, entao 2024 tem apenas janeiro. A populacao "
+        "exposta sao os clientes ativos em 01/01/2024 e o churn de 2024 e quem "
+        "cancelou entre 01/01 e 31/01/2024. Essa e uma taxa de um mes, diferente da "
+        "proporcao de cancelados do arquivo inteiro usada nas secoes 1 a 4.",
+    )
+    relatorio.adicionar_tabela("Populacao exposta em 2024", resumo_periodo_2024)
+    relatorio.adicionar_tabela("Filtros aplicados", filtros_2024, mostrar_indice=False)
+    relatorio.adicionar_texto(
+        "Como ler o resumo: _0 sao os clientes que continuaram ativos e _1 os que "
+        "cancelaram. d de Cohen e a diferenca das medias em desvios padrao (0,2 "
+        "pequena, 0,5 media, 0,8 grande). AUC e a chance de um cliente que cancelou "
+        "ter valor maior que um que ficou: 0,5 = a variavel nao separa os grupos; "
+        "perto de 0 = quem cancela tem valores menores; perto de 1 = valores maiores. "
+        "As variaveis estao ordenadas da que mais separa para a que menos separa."
+    )
+    relatorio.adicionar_tabela(
+        "Resumo das variaveis numericas x churn de 2024",
+        resumo_numericas_2024,
+        casas_decimais=3,
+    )
+    relatorio.adicionar_tabela(
+        "Resumo das variaveis categoricas x churn de 2024",
+        resumo_categoricas_2024,
+        casas_decimais=4,
+    )
+
+    # Uma secao por variavel numerica, na ordem do resumo: primeiro o
+    # histograma de ativos x cancelados, depois a taxa por faixa
+    for variavel in resumo_numericas_2024.index:
+        relatorio.adicionar_secao(f"5. Churn em 2024 x {variavel}", NOTAS_CHURN_2024[variavel])
+        relatorio.adicionar_figura(
+            f"Histograma de {variavel}: ativos x cancelados (% de cada grupo)",
+            bivariada_2024.grafico_histograma_por_grupo(variavel, "churn_2024"),
+        )
+        relatorio.adicionar_tabela(
+            f"Taxa de cancelamento por faixa de {variavel}",
+            taxas_faixa_2024[variavel],
+            casas_decimais=3,
+        )
+
+    relatorio.adicionar_secao(
+        "5. Churn em 2024 x plano, ciclo e regiao",
+        'Taxa de cancelamento em janeiro/2024 por categoria. A regiao "?" fica de fora.',
+    )
+    for variavel, bivariada in bivariadas_categoricas_2024.items():
+        relatorio.adicionar_tabela(
+            f"Cancelamento por {variavel}",
+            bivariada.taxa_por_categoria(variavel, "churn_2024"),
+            casas_decimais=4,
+        )
+        relatorio.adicionar_figura(
+            f"Clientes e taxa de cancelamento por {variavel}",
+            bivariada.grafico_contagem_e_taxa(variavel, "churn_2024"),
+        )
+
     # --- Limitacoes ---
     relatorio.adicionar_secao("Limitacoes")
     relatorio.adicionar_lista(
@@ -284,6 +468,11 @@ if __name__ == "__main__":
             "assinatura diferentes tiveram chances diferentes de cancelar.",
             "Os p-valores foram calculados com as distribuicoes t e qui-quadrado "
             "implementadas em funcao/distribuicoes.py, sem o scipy.",
+            "Churn em 2024: a base so tem janeiro de 2024. NPS, dias ativos, horas "
+            "e recencia sao medidos na extracao, sem data propria; parte deles pode "
+            "refletir a saida em vez de explica-la. A analise e bivariada: cada "
+            "variavel e vista sozinha, sem controlar as outras (ex.: clientes novos "
+            "tambem assistiram menos horas no total).",
         ]
     )
 
